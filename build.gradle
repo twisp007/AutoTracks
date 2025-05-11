@@ -1,12 +1,17 @@
 apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android'
 
 buildscript {
+    ext {
+        kotlin_version = '2.1.20'
+    }
     repositories {
         google()
         mavenCentral()
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:8.9.2'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
     }
 }
 
@@ -136,10 +141,14 @@ android {
         // Disables dependency metadata when building Android App Bundles.
         includeInBundle = false
     }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
 
 }
 
 dependencies {
+    implementation 'androidx.core:core-ktx:1.16.0'
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
 
     implementation 'androidx.appcompat:appcompat:1.7.0'
@@ -152,6 +161,9 @@ dependencies {
     implementation 'androidx.core:core-splashscreen:1.0.1'
     implementation 'androidx.mediarouter:mediarouter:1.7.0'
     implementation 'androidx.core:core-location-altitude:1.0.0-alpha03'
+
+    // non free
+    implementation 'com.google.android.gms:play-services-location:21.3.0'
 
     androidTestImplementation 'androidx.test:core:1.6.1'
     androidTestImplementation 'androidx.test.ext:junit:1.2.1'

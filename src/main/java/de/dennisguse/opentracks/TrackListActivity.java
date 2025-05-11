@@ -33,6 +33,7 @@ import android.widget.Toast;
 import androidx.annotation.Nullable;
 import androidx.appcompat.content.res.AppCompatResources;
 import androidx.core.content.ContextCompat;
+import androidx.lifecycle.Observer; // Import AndroidX Lifecycle Observer
 import androidx.recyclerview.widget.LinearLayoutManager;
 
 import com.google.android.material.button.MaterialButton;
@@ -45,7 +46,10 @@ import java.util.Objects;
 import de.dennisguse.opentracks.data.ContentProviderUtils;
 import de.dennisguse.opentracks.data.models.Track;
 import de.dennisguse.opentracks.databinding.TrackListBinding;
+import de.dennisguse.opentracks.detectors.VEHICLE_STATE; // Import VEHICLE_STATE
+import de.dennisguse.opentracks.detectors.VehicleStateDetector; // Import VehicleStateDetector
 import de.dennisguse.opentracks.sensors.GpsStatusValue;
+import de.dennisguse.opentracks.services.AutoTrackService;
 import de.dennisguse.opentracks.services.MissingPermissionException;
 import de.dennisguse.opentracks.services.RecordingStatus;
 import de.dennisguse.opentracks.services.TrackRecordingService;
@@ -91,6 +95,9 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
         public void onPrepare(Menu menu, int[] positions, long[] trackIds, boolean showSelectAll) {
             boolean isSingleSelection = trackIds.length == 1;
 
+            //Ensure viewBinding is not null before accessing its members
+            if (viewBinding == null) return;
+
             viewBinding.bottomAppBar.performHide(true);
             viewBinding.trackListFabAction.setVisibility(View.INVISIBLE);
 
@@ -105,6 +112,8 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
 
         @Override
         public void onDestroy() {
+            //Ensure viewBinding is not null before accessing its members
+            if (viewBinding == null) return;
             viewBinding.trackListFabAction.setVisibility(View.VISIBLE);
             viewBinding.bottomAppBar.performShow(true);
         }
@@ -142,11 +151,28 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // viewBinding is initialized by getRootView() which is called by super.onCreate()
+
         setDefaultKeyMode(DEFAULT_KEYS_SEARCH_LOCAL);
 
         requestRequiredPermissions();
 
+        // Start the AutoTrackService if it's intended to run independently
+        // If its lifecycle is purely tied to TrackListActivity, this might be managed differently
+        // For now, we assume it's started here to begin its monitoring.
+        Intent serviceIntent = new Intent(this, AutoTrackService.class);
+        ContextCompat.startForegroundService(this, serviceIntent);
+
+
         recordingStatusConnection = new TrackRecordingServiceConnection(bindChangedCallback);
+
+        // Ensure viewBinding is not null before setting listeners
+        if (viewBinding == null) {
+            Log.e(TAG, "ViewBinding is null in onCreate after super.onCreate()");
+            // Consider finishing the activity or showing an error if viewBinding is crucial here
+            finish();
+            return;
+        }
 
         viewBinding.aggregatedStatsButton.setOnClickListener((view) -> startActivity(IntentUtils.newIntent(this, AggregatedStatisticsActivity.class)));
         viewBinding.sensorStartButton.setOnClickListener((view) -> {
@@ -163,9 +189,9 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
         });
 
         LinearLayoutManager layoutManager = new LinearLayoutManager(this);
-        adapter = new TrackListAdapter(this, viewBinding.trackList, recordingStatus, unitSystem);
-        viewBinding.trackList.setLayoutManager(layoutManager);
-        viewBinding.trackList.setAdapter(adapter);
+        adapter = new TrackListAdapter(this, viewBinding.rvTrackList, recordingStatus, unitSystem);
+        viewBinding.rvTrackList.setLayoutManager(layoutManager);
+        viewBinding.rvTrackList.setAdapter(adapter);
 
         viewBinding.trackListFabAction.setOnClickListener((view) -> {
             if (recordingStatus.isRecording()) {
@@ -174,10 +200,10 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
             }
 
             // Not Recording -> Recording
-            Log.i(TAG, "Starting recording");
-            updateGpsMenuItem(false, true);
+            Log.i(TAG, "FAB Action: Starting new track recording.");
+            // updateGpsMenuItem(false, true); // This will be handled by onRecordingStatusChanged
             startSensorsOrRecording((service, connection) -> {
-                Track.Id trackId = service.startNewTrack();
+                Track.Id trackId = service.startNewTrack(); // This call will trigger RecordingStatusObservable
 
                 Intent newIntent = IntentUtils.newIntent(TrackListActivity.this, TrackRecordingActivity.class);
                 newIntent.putExtra(TrackRecordingActivity.EXTRA_TRACK_ID, trackId);
@@ -190,16 +216,18 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
             }
 
             // Recording -> Stop
+            Log.i(TAG, "FAB Action: Stopping current track recording.");
             ActivityUtils.vibrate(this, Duration.ofSeconds(1));
-            updateGpsMenuItem(false, false);
-            recordingStatusConnection.stopRecording(TrackListActivity.this);
-            viewBinding.trackListFabAction.setImageResource(R.drawable.ic_baseline_record_24);
-            viewBinding.trackListFabAction.setBackgroundTintList(ContextCompat.getColorStateList(this, R.color.red_dark));
+            // updateGpsMenuItem(false, false); // This will be handled by onRecordingStatusChanged
+            recordingStatusConnection.stopRecording(TrackListActivity.this); // This will trigger RecordingStatusObservable
+            // UI updates for FAB are handled in setFloatButton via onRecordingStatusChanged
             return true;
         });
 
         setSupportActionBar(viewBinding.trackListToolbar);
-        adapter.setActionModeCallback(contextualActionModeCallback);
+        if (adapter != null) { // Check adapter for null before setting callback
+            adapter.setActionModeCallback(contextualActionModeCallback);
+        }
     }
 
     private void requestRequiredPermissions() {
@@ -211,7 +239,28 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
         super.onStart();
 
         PreferencesUtils.registerOnSharedPreferenceChangeListener(sharedPreferenceChangeListener);
-        recordingStatusConnection.bind(this);
+        if (recordingStatusConnection != null) { // Check for null
+            recordingStatusConnection.bind(this);
+        }
+
+
+        // Observe the LiveData from VehicleStateDetector
+        if (viewBinding != null && viewBinding.vehicleStateTextview != null) {
+            // Assuming VehicleStateDetector.INSTANCE is how you access the singleton
+            VehicleStateDetector.INSTANCE.getCurrentVehicleState().observe(this, new Observer<VEHICLE_STATE>() {
+                @Override
+                public void onChanged(VEHICLE_STATE vehicleState) {
+                    if (vehicleState != null) {
+                        String stateText = vehicleState.toString();
+                        viewBinding.vehicleStateTextview.setText(stateText);
+                    } else {
+                        viewBinding.vehicleStateTextview.setText("Vehicle State Not Available");
+                    }
+                }
+            });
+        } else {
+            Log.e(TAG, "ViewBinding or vehicleStateTextview is null in onStart when trying to observe vehicle state.");
+        }
     }
 
     @Override
@@ -220,9 +269,12 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
 
         // Update UI
         this.invalidateOptionsMenu();
+        // loadData() is called here, which is good for when returning to the activity.
+        // The change in onRecordingStatusChanged will handle immediate updates if already resumed.
         loadData();
 
-        // Float button
+        // Float button state is updated via onRecordingStatusChanged -> setFloatButton
+        // but call it here too to ensure correct initial state on resume if status hasn't changed.
         setFloatButton();
     }
 
@@ -231,12 +283,20 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
         super.onStop();
 
         PreferencesUtils.unregisterOnSharedPreferenceChangeListener(sharedPreferenceChangeListener);
-        recordingStatusConnection.unbind(this);
+        if (recordingStatusConnection != null) { // Check for null
+            recordingStatusConnection.unbind(this);
+        }
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
+
+        // Consider if AutoTrackService should be stopped here or if it runs independently.
+        // If it's meant to run only when TrackListActivity is active or initiated by it:
+        // Intent serviceIntent = new Intent(this, AutoTrackService.class);
+        // stopService(serviceIntent);
+
         viewBinding = null;
         recordingStatusConnection = null;
         adapter = null;
@@ -246,20 +306,26 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
     protected View getRootView() {
         viewBinding = TrackListBinding.inflate(getLayoutInflater());
 
-        viewBinding.trackListSearchView.getEditText().setOnEditorActionListener((v, actionId, event) -> {
-            searchQuery = viewBinding.trackListSearchView.getEditText().getText().toString();
-            viewBinding.trackListSearchView.hide();
-            loadData();
-            return true;
-        });
-
+        if (viewBinding != null && viewBinding.trackListSearchView != null && viewBinding.trackListSearchView.getEditText() != null) {
+            viewBinding.trackListSearchView.getEditText().setOnEditorActionListener((v, actionId, event) -> {
+                if (viewBinding.trackListSearchView.getEditText() != null) {
+                    searchQuery = viewBinding.trackListSearchView.getEditText().getText().toString();
+                }
+                if(viewBinding.trackListSearchView != null) { // Check again before hiding
+                    viewBinding.trackListSearchView.hide();
+                }
+                loadData();
+                return true;
+            });
+        } else {
+            Log.e(TAG, "ViewBinding or search components are null in getRootView.");
+        }
         return viewBinding.getRoot();
     }
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         getMenuInflater().inflate(R.menu.track_list, menu);
-
         return super.onCreateOptionsMenu(menu);
     }
 
@@ -271,37 +337,52 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        if (item.getItemId() == R.id.track_list_markers) {
+        int itemId = item.getItemId();
+        if (itemId == R.id.track_list_markers) {
             startActivity(IntentUtils.newIntent(this, MarkerListActivity.class));
             return true;
-        }
-
-        if (item.getItemId() == R.id.track_list_settings) {
+        } else if (itemId == R.id.track_list_settings) {
             startActivity(IntentUtils.newIntent(this, SettingsActivity.class));
             return true;
-        }
-
-        if (item.getItemId() == R.id.track_list_help) {
+        } else if (itemId == R.id.track_list_help) {
             startActivity(IntentUtils.newIntent(this, HelpActivity.class));
             return true;
-        }
-
-        if (item.getItemId() == R.id.track_list_about) {
+        } else if (itemId == R.id.track_list_about) {
             startActivity(IntentUtils.newIntent(this, AboutActivity.class));
             return true;
         }
-
         return super.onOptionsItemSelected(item);
     }
 
     private void loadData() {
-        viewBinding.trackListToolbar.setText(searchQuery);
+        if (viewBinding == null) {
+            Log.e(TAG, "ViewBinding is null in loadData. Cannot load track data.");
+            return;
+        }
 
-        viewBinding.trackListToolbar.setTitle(Objects.requireNonNullElseGet(searchQuery, () -> getString(R.string.app_name)));
+        // For Material SearchBar, text might be set differently or observed.
+        // This assumes trackListToolbar is a Material Components SearchBar or similar.
+        if (viewBinding.trackListToolbar != null) { // Check toolbar for null
+            viewBinding.trackListToolbar.setText(searchQuery);
+            viewBinding.trackListToolbar.setHint(Objects.requireNonNullElseGet(searchQuery, () -> getString(R.string.app_name)));
+        }
 
-        Cursor tracks = new ContentProviderUtils(this).searchTracks(searchQuery);
 
-        adapter.swapData(tracks);
+        Cursor tracks = null;
+        try {
+            ContentProviderUtils contentProviderUtils = new ContentProviderUtils(this);
+            tracks = contentProviderUtils.searchTracks(searchQuery); // This re-queries the database
+        } catch (Exception e) {
+            Log.e(TAG, "Error loading track data from ContentProviderUtils", e);
+            // Optionally, show a message to the user
+        }
+
+
+        if (adapter != null) {
+            adapter.swapData(tracks); // This should update the RecyclerView
+        } else {
+            Log.w(TAG, "Adapter is null in loadData. Cannot swap data.");
+        }
     }
 
     @Override
@@ -317,34 +398,24 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
     @Nullable
     @Override
     protected Track.Id getRecordingTrackId() {
-        return recordingStatus.trackId();
+        return recordingStatus != null ? recordingStatus.trackId() : null; // Null check for recordingStatus
     }
 
-    /**
-     * Updates the menu items with the icon specified.
-     *
-     * @param isGpsStarted true if gps is started
-     * @param isRecording  true if recording
-     */
-    //TODO Check if if can be avoided to call this outside of onGpsStatusChanged()
     private void updateGpsMenuItem(boolean isGpsStarted, boolean isRecording) {
+        if (viewBinding == null || viewBinding.sensorStartButton == null) {
+            Log.e(TAG, "ViewBinding or sensorStartButton is null in updateGpsMenuItem.");
+            return;
+        }
         MaterialButton startGpsMenuItem = viewBinding.sensorStartButton;
         startGpsMenuItem.setVisibility(!isRecording ? View.VISIBLE : View.INVISIBLE);
         if (!isRecording) {
             startGpsMenuItem.setIcon(AppCompatResources.getDrawable(this, isGpsStarted ? gpsStatusValue.icon : R.drawable.ic_gps_off_24dp));
-            if (startGpsMenuItem.getIcon() instanceof AnimatedVectorDrawable animatedVectorDrawable) {
-                animatedVectorDrawable.start();
+            if (startGpsMenuItem.getIcon() instanceof AnimatedVectorDrawable) {
+                ((AnimatedVectorDrawable) startGpsMenuItem.getIcon()).start();
             }
         }
     }
 
-    /**
-     * Handles a context item selection.
-     *
-     * @param itemId       the menu item id
-     * @param longTrackIds the track ids
-     * @return true if handled.
-     */
     private boolean handleContextItem(int itemId, long... longTrackIds) {
         Track.Id[] trackIds = new Track.Id[longTrackIds.length];
         for (int i = 0; i < longTrackIds.length; i++) {
@@ -383,7 +454,9 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
         }
 
         if (itemId == R.id.list_context_menu_select_all) {
-            adapter.setAllSelected(true);
+            if (adapter != null) {
+                adapter.setAllSelected(true);
+            }
             return false;
         }
 
@@ -391,19 +464,56 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
     }
 
     public void onGpsStatusChanged(GpsStatusValue newStatus) {
-        gpsStatusValue = newStatus;
-        updateGpsMenuItem(true, recordingStatus.isRecording());
+        if (newStatus != null) { // Null check for newStatus
+            gpsStatusValue = newStatus;
+            // recordingStatus can be null here if service is not yet bound or status not received
+            updateGpsMenuItem(true, recordingStatus != null && recordingStatus.isRecording());
+        }
     }
 
     private void setFloatButton() {
+        if (viewBinding == null || viewBinding.trackListFabAction == null) {
+            Log.e(TAG, "ViewBinding or trackListFabAction is null in setFloatButton.");
+            return;
+        }
+        if (recordingStatus == null) { // Null check for recordingStatus
+            Log.w(TAG, "RecordingStatus is null in setFloatButton. Defaulting FAB to non-recording state.");
+            viewBinding.trackListFabAction.setImageResource(R.drawable.ic_baseline_record_24);
+            viewBinding.trackListFabAction.setBackgroundTintList(ContextCompat.getColorStateList(this, R.color.red_dark));
+            return;
+        }
         viewBinding.trackListFabAction.setImageResource(recordingStatus.isRecording() ? R.drawable.ic_baseline_stop_24 : R.drawable.ic_baseline_record_24);
         viewBinding.trackListFabAction.setBackgroundTintList(ContextCompat.getColorStateList(this, recordingStatus.isRecording() ? R.color.opentracks : R.color.red_dark));
     }
 
-    private void onRecordingStatusChanged(RecordingStatus status) {
-        recordingStatus = status;
-        setFloatButton();
-        adapter.updateRecordingStatus(recordingStatus);
+    private void onRecordingStatusChanged(RecordingStatus newStatus) {
+        if (newStatus == null) { // Null check for newStatus
+            Log.w(TAG, "Received null RecordingStatus in onRecordingStatusChanged.");
+            return;
+        }
+
+        boolean TwasRecording = (recordingStatus != null && recordingStatus.isRecording()); // Previous state
+        recordingStatus = newStatus; // Update to new status
+
+        Log.d(TAG, "onRecordingStatusChanged: New status is recording: " + recordingStatus.isRecording() + ", Was recording: " + TwasRecording);
+
+        setFloatButton(); // Update FAB based on the new status
+        if (adapter != null) {
+            adapter.updateRecordingStatus(recordingStatus); // Inform adapter of new status
+        }
+
+        // If recording has just started (transitioned from not recording to recording)
+        if (recordingStatus.isRecording() && !TwasRecording) {
+            Log.i(TAG, "Recording has just started. Reloading track list data.");
+            loadData(); // This will re-query and call adapter.swapData()
+        }
+        // Also consider reloading if recording just stopped, to reflect any final track updates.
+        // However, typically onResume handles list refresh when returning to this screen.
+        // If a track is stopped and the user stays on this screen, this is where you might reload.
+        else if (!recordingStatus.isRecording() && TwasRecording) {
+            Log.i(TAG, "Recording has just stopped. Reloading track list data to reflect final state.");
+            loadData();
+        }
     }
 
     private void startSensorsOrRecording(TrackRecordingServiceConnection.Callback callback) {
@@ -413,4 +523,8 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
             Toast.makeText(this, R.string.permission_recording_failed, Toast.LENGTH_LONG).show();
         }
     }
+
+    // Add these to your strings.xml if not already present:
+    // <string name="vehicle_state_label">Vehicle State: %1$s</string>
+    // <string name="vehicle_state_unavailable">Vehicle state: Unavailable</string>
 }

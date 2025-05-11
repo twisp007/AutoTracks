@@ -48,7 +48,7 @@ limitations under the License.
 
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-<!--    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />-->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
@@ -419,6 +419,12 @@ limitations under the License.
                 android:name="autoStoreLocales"
                 android:value="true" />
         </service>
+
+        <!-- for keeping and background and auto starting recording -->
+        <service
+            android:name=".services.AutoTrackService"
+            android:foregroundServiceType="location"
+            android:exported="false" />
     </application>
 
     <queries>

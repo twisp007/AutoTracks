@@ -2,6 +2,7 @@ package de.dennisguse.opentracks.introduction;
 
 import android.content.Intent;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 
 import androidx.annotation.NonNull;
@@ -15,6 +16,7 @@ import java.util.List;
 import de.dennisguse.opentracks.AbstractActivity;
 import de.dennisguse.opentracks.TrackListActivity;
 import de.dennisguse.opentracks.databinding.IntroductionBinding;
+import de.dennisguse.opentracks.services.AutoTrackService;
 import de.dennisguse.opentracks.settings.PreferencesUtils;
 import de.dennisguse.opentracks.util.IntentUtils;
 
